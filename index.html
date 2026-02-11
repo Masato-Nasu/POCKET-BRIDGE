@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1216" />
+  <title>PocketBridge</title>
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <div class="brand__title">PocketBridge</div>
+      <div class="brand__sub">URL → 本文 → タップ収集 → TANGO-CHOへ</div>
+    </div>
+
+    <div class="topbar__actions">
+      <button id="btnHistory" class="btn btn--ghost" type="button" aria-label="履歴">履歴</button>
+      <button id="btnPocket" class="btn btn--primary" type="button" aria-label="収集箱">
+        収集箱 <span id="pocketCount" class="badge">0</span>
+      </button>
+    </div>
+  </header>
+
+  <main class="main">
+    <section class="card inputCard">
+      <div class="row">
+        <input id="urlInput" class="input" type="url" inputmode="url" placeholder="BBCなどの記事URLを貼り付け" autocomplete="off" spellcheck="false" />
+        <button id="btnLoad" class="btn btn--primary" type="button">読む</button>
+      </div>
+
+      <div class="row row--meta">
+        <label class="check">
+          <input id="useJina" type="checkbox" checked />
+          <span>ブロック時は抽出（r.jina.ai）を使う</span>
+        </label>
+
+        <label class="check">
+          <input id="wrapWords" type="checkbox" checked />
+          <span>単語をタップで拾える表示</span>
+        </label>
+
+        <button id="btnClear" class="btn btn--ghost" type="button">クリア</button>
+      </div>
+
+      <div id="status" class="status" role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card readerCard">
+      <div class="readerHead">
+        <div class="readerTitle" id="articleTitle">まだ読み込みません</div>
+        <div class="readerMeta" id="articleMeta"></div>
+      </div>
+      <div id="reader" class="reader" tabindex="0" aria-label="本文"></div>
+    </section>
+  </main>
+
+  <!-- Phrase bar -->
+  <div id="phraseBar" class="phraseBar hidden" role="region" aria-label="フレーズ収集">
+    <div class="phraseBar__text" id="phrasePreview">フレーズを収集</div>
+    <div class="phraseBar__actions">
+      <button id="btnCollectPhrase" class="btn btn--primary btn--small" type="button">収集</button>
+      <button id="btnCancelPhrase" class="btn btn--ghost btn--small" type="button">キャンセル</button>
+    </div>
+  </div>
+
+  <!-- Pocket drawer -->
+  <div id="drawerOverlay" class="overlay hidden"></div>
+  <aside id="drawer" class="drawer hidden" aria-label="収集箱">
+    <div class="drawer__head">
+      <div class="drawer__title">収集箱</div>
+      <button id="btnCloseDrawer" class="btn btn--ghost" type="button">閉じる</button>
+    </div>
+
+    <div class="drawer__tools">
+      <div class="seg">
+        <button class="seg__btn is-active" data-filter="all" type="button">全部</button>
+        <button class="seg__btn" data-filter="unsent" type="button">未送信</button>
+        <button class="seg__btn" data-filter="sent" type="button">送信済</button>
+      </div>
+
+      <div class="drawer__bulk">
+        <button id="btnCopyAll" class="btn btn--ghost btn--small" type="button">未送信をコピー</button>
+        <button id="btnClearSent" class="btn btn--ghost btn--small" type="button">送信済を削除</button>
+      </div>
+    </div>
+
+    <div id="pocketList" class="pocketList"></div>
+
+    <div class="drawer__foot">
+      <div class="hint">
+        単語：タップ / フレーズ：長押しで選択 → 下の「収集」
+      </div>
+    </div>
+  </aside>
+
+  <!-- History modal -->
+  <div id="historyModal" class="modal hidden" role="dialog" aria-modal="true" aria-label="履歴">
+    <div class="modal__panel">
+      <div class="modal__head">
+        <div class="modal__title">履歴</div>
+        <button id="btnCloseHistory" class="btn btn--ghost" type="button">閉じる</button>
+      </div>
+      <div id="historyList" class="historyList"></div>
+      <div class="modal__foot">
+        <button id="btnClearHistory" class="btn btn--ghost" type="button">履歴を消す</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
