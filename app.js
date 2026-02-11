@@ -1,11 +1,11 @@
-/* PocketBridge v0.1.1
+/* PocketBridge v0.1.2
    - URLを貼る → 本文を抽出して表示
    - 単語：タップで収集
    - フレーズ：長押しで選択 → 収集
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.1";
+const APP_VERSION = "0.1.2";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
