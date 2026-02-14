@@ -5,7 +5,7 @@
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.3";
+const APP_VERSION = "0.1.4";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
@@ -169,6 +169,72 @@ function cleanJinaOutput(text) {
   }
   if (cutAt !== -1) t = t.slice(0, cutAt);
   return t.trim();
+}
+
+function isBBC(url) {
+  try {
+    const h = new URL(url).hostname.toLowerCase();
+    return h.endsWith("bbc.com") || h.endsWith("bbc.co.uk");
+  } catch {
+    return false;
+  }
+}
+
+// BBC記事は目次/関連/フッター等が混ざりやすいので、軽く刈り取る
+function cleanBBCText(text) {
+  let t = (text ?? "").replace(/\r\n/g, "\n");
+
+  // 目次（Contents/目次）ブロックを除去：短い行が連続する部分をスキップ
+  const lines = t.split("\n");
+  const out = [];
+  let skippingTOC = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const s = line.trim();
+
+    if (!skippingTOC && (s === "Contents" || s === "目次")) {
+      skippingTOC = true;
+      continue;
+    }
+
+    if (skippingTOC) {
+      if (!s) continue;
+      const isLongish = s.length >= 90;
+      const looksLikeSentence = /[\.!?。]/.test(s) && s.length >= 40;
+      if (isLongish || looksLikeSentence) {
+        skippingTOC = false;
+        out.push(line);
+      } else {
+        // 目次っぽい短文は捨てる
+        continue;
+      }
+    } else {
+      out.push(line);
+    }
+  }
+  t = out.join("\n");
+
+  // 下部の関連/フッター系をカット（最初に出たものから下を切る）
+  const cutMarkers = [
+    "\nMore on this story\n",
+    "\nMore on this\n",
+    "\nRelated Topics\n",
+    "\nRelated content\n",
+    "\nExplore more\n",
+    "\nElsewhere on the BBC\n",
+    "\nBBC News Services\n",
+    "\nTop Stories\n",
+    "\nもっと読む\n",
+    "\n関連\n",
+  ];
+  let cutAt = -1;
+  for (const m of cutMarkers) {
+    const idx = t.indexOf(m);
+    if (idx !== -1) cutAt = cutAt === -1 ? idx : Math.min(cutAt, idx);
+  }
+  if (cutAt !== -1) t = t.slice(0, cutAt);
+
+  return t.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function extractTitleFromText(text) {
@@ -582,6 +648,11 @@ async function loadFromInput() {
     let title = result.title || "";
     let text = result.text || "";
     let source = result.source || "direct";
+
+    // BBCは目次・関連が混ざりやすいので自動で軽く整形
+    if (isBBC(url)) {
+      text = cleanBBCText(text);
+    }
 
     if (!text || text.length < 80) {
       throw new Error("本文が取れませんでした");
