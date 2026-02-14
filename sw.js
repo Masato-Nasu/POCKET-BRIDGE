@@ -1,5 +1,5 @@
-/* PocketBridge service worker */
-const CACHE_NAME = "pocketbridge-v0.1.5";
+/* WordHunt service worker */
+const CACHE_NAME = "pocketbridge-v0.1.4";
 const ASSETS = [
   "./",
   "./index.html",

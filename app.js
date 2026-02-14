@@ -5,7 +5,7 @@
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.5";
+const APP_VERSION = "0.1.4";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
@@ -61,10 +61,7 @@ const state = {
 
 function now() { return Date.now(); }
 
-// Android環境ではネット状況が不安定になりやすいので、
-// 直取得は短め・抽出（Jina）は少し長めにして「全部タイムアウト」を避ける。
-const FETCH_TIMEOUT_DIRECT_MS = 8000;
-const FETCH_TIMEOUT_JINA_MS = 22000;
+const FETCH_TIMEOUT_MS = 9000; // Android体感のため少し短め
 
 function pruneCache(maxEntries = 10) {
   try {
@@ -88,7 +85,7 @@ function getCacheItem(url) {
   return (state.cache && state.cache[url]) ? state.cache[url] : null;
 }
 
-async function fetchWithTimeout(url, opts = {}, timeoutMs) {
+async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort("timeout"), timeoutMs);
   try {
@@ -156,6 +153,27 @@ function normalizeUrl(u) {
   try { new URL(s); return s; } catch { return ""; }
 }
 
+// Pasteや共有で「タイトル + URL」が混ざることがあるため、最初のURLだけを抜き出す
+function extractFirstUrlFromText(text) {
+  const s = (text ?? "").trim();
+  if (!s) return "";
+
+  // 1) http(s)://... を優先
+  const m1 = s.match(/https?:\/\/[^\s]+/i);
+  if (m1) return m1[0];
+
+  // 2) スキームなしドメイン（例: bbc.com/news..., share.google/..., example.co.uk/...）
+  const m2 = s.match(/(?:^|\s)((?:[a-z0-9-]+\.)+[a-z]{2,}(?:\/[\w\-\._~%!$&'()*+,;=:@\/?#\[\]]*)?)/i);
+  if (m2) return m2[1];
+
+  return "";
+}
+
+function normalizeUrlFromMixedText(text) {
+  const u = extractFirstUrlFromText(text);
+  return normalizeUrl(u);
+}
+
 function looksLikeUrl(s) {
   const t = (s ?? "").trim();
   return /^https?:\/\//i.test(t) || /^[a-z0-9.-]+\.[a-z]{2,}\//i.test(t) || /^[a-z0-9.-]+\.[a-z]{2,}$/i.test(t);
@@ -172,72 +190,6 @@ function cleanJinaOutput(text) {
   }
   if (cutAt !== -1) t = t.slice(0, cutAt);
   return t.trim();
-}
-
-function isBBC(url) {
-  try {
-    const h = new URL(url).hostname.toLowerCase();
-    return h.endsWith("bbc.com") || h.endsWith("bbc.co.uk");
-  } catch {
-    return false;
-  }
-}
-
-// BBC記事は目次/関連/フッター等が混ざりやすいので、軽く刈り取る
-function cleanBBCText(text) {
-  let t = (text ?? "").replace(/\r\n/g, "\n");
-
-  // 目次（Contents/目次）ブロックを除去：短い行が連続する部分をスキップ
-  const lines = t.split("\n");
-  const out = [];
-  let skippingTOC = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const s = line.trim();
-
-    if (!skippingTOC && (s === "Contents" || s === "目次")) {
-      skippingTOC = true;
-      continue;
-    }
-
-    if (skippingTOC) {
-      if (!s) continue;
-      const isLongish = s.length >= 90;
-      const looksLikeSentence = /[\.!?。]/.test(s) && s.length >= 40;
-      if (isLongish || looksLikeSentence) {
-        skippingTOC = false;
-        out.push(line);
-      } else {
-        // 目次っぽい短文は捨てる
-        continue;
-      }
-    } else {
-      out.push(line);
-    }
-  }
-  t = out.join("\n");
-
-  // 下部の関連/フッター系をカット（最初に出たものから下を切る）
-  const cutMarkers = [
-    "\nMore on this story\n",
-    "\nMore on this\n",
-    "\nRelated Topics\n",
-    "\nRelated content\n",
-    "\nExplore more\n",
-    "\nElsewhere on the BBC\n",
-    "\nBBC News Services\n",
-    "\nTop Stories\n",
-    "\nもっと読む\n",
-    "\n関連\n",
-  ];
-  let cutAt = -1;
-  for (const m of cutMarkers) {
-    const idx = t.indexOf(m);
-    if (idx !== -1) cutAt = cutAt === -1 ? idx : Math.min(cutAt, idx);
-  }
-  if (cutAt !== -1) t = t.slice(0, cutAt);
-
-  return t.replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function extractTitleFromText(text) {
@@ -296,7 +248,7 @@ function htmlToText(html, baseUrl) {
 }
 
 async function fetchDirect(url) {
-  const res = await fetchWithTimeout(url, { cache: "no-store" }, FETCH_TIMEOUT_DIRECT_MS);
+  const res = await fetchWithTimeout(url, { cache: "no-store" });
   if (!res.ok) throw new Error("HTTP " + res.status);
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("text/html") && !ct.includes("application/xhtml+xml")) {
@@ -310,30 +262,9 @@ async function fetchViaJina(url) {
   // Jina Reader: simply prepend r.jina.ai
   // docs: https://jina.ai/reader/  (public URLs向け)
   const target = "https://r.jina.ai/" + url;
-  const res = await fetchWithTimeout(target, { cache: "no-store" }, FETCH_TIMEOUT_JINA_MS);
+  const res = await fetchWithTimeout(target, { cache: "no-store" });
   if (!res.ok) throw new Error("Jina HTTP " + res.status);
   return await res.text();
-}
-
-// Promise.any がない環境（古いWebView等）でも動くようにフォールバック
-async function promiseAny(promises) {
-  if (typeof Promise.any === "function") return await Promise.any(promises);
-  return await new Promise((resolve, reject) => {
-    const errors = [];
-    let pending = promises.length;
-    if (pending === 0) reject(new Error("No promises"));
-    promises.forEach((p, idx) => {
-      Promise.resolve(p).then(resolve).catch(err => {
-        errors[idx] = err;
-        pending -= 1;
-        if (pending === 0) {
-          const e = new Error("All promises were rejected");
-          e.errors = errors;
-          reject(e);
-        }
-      });
-    });
-  });
 }
 
 function setReaderText(text, wrapWords) {
@@ -623,11 +554,14 @@ function renderHistory() {
 }
 
 async function loadFromInput() {
-  const url = normalizeUrl(els.urlInput.value);
+  const url = normalizeUrlFromMixedText(els.urlInput.value);
   if (!url) {
     toast("URLが正しくありません");
     return;
   }
+
+  // 入力欄もURLだけに整形（タイトル混入を見た目から消す）
+  els.urlInput.value = url;
 
   // まずはキャッシュがあれば即表示（体感改善）
   const cached = getCacheItem(url);
@@ -660,17 +594,18 @@ async function loadFromInput() {
       })());
     }
 
-    // 先に成功したものを採用（古いWebView向けにPromise.anyフォールバックあり）
-    const result = await promiseAny(tasks);
+    // 先に成功したものを採用
+    let result;
+    try {
+      result = await Promise.any(tasks);
+    } catch (e) {
+      // すべて失敗
+      throw e;
+    }
 
     let title = result.title || "";
     let text = result.text || "";
     let source = result.source || "direct";
-
-    // BBCは目次・関連が混ざりやすいので自動で軽く整形
-    if (isBBC(url)) {
-      text = cleanBBCText(text);
-    }
 
     if (!text || text.length < 80) {
       throw new Error("本文が取れませんでした");
@@ -693,13 +628,7 @@ async function loadFromInput() {
     toast("読み込みました");
   } catch (e) {
     console.error(e);
-    const reason = String(e?.name || e?.message || "");
-    // できるだけ状況が分かる短い理由を添える（ユーザー向け）
-    const hint = /timeout/i.test(reason) ? "（タイムアウト）" :
-                 /abort/i.test(reason) ? "（中断）" :
-                 /http\s*\d+/i.test(reason) ? "（HTTPエラー）" :
-                 /cors/i.test(reason) ? "（CORS）" : "";
-    setStatus("読み込みに失敗しました。" + hint);
+    setStatus("読み込みに失敗しました。URLを確認してください。");
     toast("読み込み失敗");
   } finally {
     els.btnLoad.disabled = false;
@@ -748,6 +677,18 @@ function clearSelection() {
 els.btnLoad.addEventListener("click", loadFromInput);
 els.urlInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") loadFromInput();
+});
+// タイトル + URL を貼り付けた時にURLだけ残す
+els.urlInput.addEventListener("paste", (e) => {
+  try {
+    const text = (e.clipboardData || window.clipboardData)?.getData("text") || "";
+    const url = normalizeUrlFromMixedText(text);
+    if (url) {
+      e.preventDefault();
+      els.urlInput.value = url;
+      toast("URLだけに整形しました");
+    }
+  } catch {}
 });
 els.btnClear.addEventListener("click", () => {
   els.urlInput.value = "";
