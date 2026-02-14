@@ -5,7 +5,7 @@
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.2";
+const APP_VERSION = "0.1.3";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
@@ -56,9 +56,54 @@ const state = {
     filter: "all", // all|unsent|sent
   },
   history: [], // {url,title,at}
+  cache: {}, // { [url]: {url,title,text,source,fetchedAt} }
 };
 
 function now() { return Date.now(); }
+
+const FETCH_TIMEOUT_MS = 9000; // Android体感のため少し短め
+
+function pruneCache(maxEntries = 10) {
+  try {
+    const entries = Object.entries(state.cache || {});
+    if (entries.length <= maxEntries) return;
+    entries.sort((a,b) => (b[1]?.fetchedAt||0) - (a[1]?.fetchedAt||0));
+    const keep = new Set(entries.slice(0, maxEntries).map(e => e[0]));
+    for (const k of Object.keys(state.cache)) {
+      if (!keep.has(k)) delete state.cache[k];
+    }
+  } catch {}
+}
+
+function setCacheItem(item) {
+  if (!item?.url) return;
+  state.cache[item.url] = { url: item.url, title: item.title||"", text: item.text||"", source: item.source||"", fetchedAt: item.fetchedAt||now() };
+  pruneCache(10);
+}
+
+function getCacheItem(url) {
+  return (state.cache && state.cache[url]) ? state.cache[url] : null;
+}
+
+async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort("timeout"), timeoutMs);
+  try {
+    const res = await fetch(url, { ...opts, signal: ctrl.signal });
+    return res;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+function showArticle(item, toastMsg) {
+  if (!item?.text) return;
+  els.articleTitle.textContent = item.title || (item.url ? new URL(item.url).hostname : "");
+  els.articleMeta.textContent = `${item.url ? new URL(item.url).hostname : ""} • ${item.source === "jina" ? "抽出" : "直取得"} • ${fmtDate(item.fetchedAt || now())}`;
+  setReaderText(item.text, els.wrapWords.checked);
+  setStatus("");
+  if (toastMsg) toast(toastMsg);
+}
 
 function saveStore() {
   try {
@@ -67,6 +112,7 @@ function saveStore() {
       settings: state.settings,
       pocket: state.pocket,
       history: state.history,
+      cache: state.cache,
     }));
   } catch {}
 }
@@ -79,6 +125,7 @@ function loadStore() {
     if (data?.settings) state.settings = { ...state.settings, ...data.settings };
     if (data?.pocket?.items) state.pocket.items = data.pocket.items;
     if (data?.history) state.history = data.history;
+    if (data?.cache) state.cache = data.cache;
   } catch {}
 }
 
@@ -180,7 +227,7 @@ function htmlToText(html, baseUrl) {
 }
 
 async function fetchDirect(url) {
-  const res = await fetch(url, { cache: "no-store" });
+  const res = await fetchWithTimeout(url, { cache: "no-store" });
   if (!res.ok) throw new Error("HTTP " + res.status);
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("text/html") && !ct.includes("application/xhtml+xml")) {
@@ -194,7 +241,7 @@ async function fetchViaJina(url) {
   // Jina Reader: simply prepend r.jina.ai
   // docs: https://jina.ai/reader/  (public URLs向け)
   const target = "https://r.jina.ai/" + url;
-  const res = await fetch(target, { cache: "no-store" });
+  const res = await fetchWithTimeout(target, { cache: "no-store" });
   if (!res.ok) throw new Error("Jina HTTP " + res.status);
   return await res.text();
 }
@@ -492,30 +539,49 @@ async function loadFromInput() {
     return;
   }
 
-  setStatus("読み込み中…");
+  // まずはキャッシュがあれば即表示（体感改善）
+  const cached = getCacheItem(url);
+  if (cached && cached.text && cached.text.length >= 80) {
+    state.current = cached;
+    showArticle(cached, "キャッシュから表示");
+    setStatus("更新中…");
+  } else {
+    setStatus("読み込み中…");
+  }
+
   els.btnLoad.disabled = true;
 
   try {
-    let title = "";
-    let text = "";
-    let source = "";
+    const tasks = [];
 
-    // 1) Direct fetch (CORSが通るサイトのみ)
-    try {
+    // Direct fetch（CORSが通る場合は速い）
+    tasks.push((async () => {
       const html = await fetchDirect(url);
       const out = htmlToText(html, url);
-      title = out.title || "";
-      text = out.text || "";
-      source = "direct";
-    } catch (e) {
-      // 2) fallback
-      if (!els.useJina.checked) throw e;
-      const raw = await fetchViaJina(url);
-      const cleaned = cleanJinaOutput(raw);
-      title = extractTitleFromText(cleaned) || "";
-      text = cleaned;
-      source = "jina";
+      return { title: out.title || "", text: out.text || "", source: "direct" };
+    })());
+
+    // Jina fallback（多くのサイトで安定。ただし遅い場合あり）
+    if (els.useJina.checked) {
+      tasks.push((async () => {
+        const raw = await fetchViaJina(url);
+        const cleaned = cleanJinaOutput(raw);
+        return { title: extractTitleFromText(cleaned) || "", text: cleaned, source: "jina" };
+      })());
     }
+
+    // 先に成功したものを採用
+    let result;
+    try {
+      result = await Promise.any(tasks);
+    } catch (e) {
+      // すべて失敗
+      throw e;
+    }
+
+    let title = result.title || "";
+    let text = result.text || "";
+    let source = result.source || "direct";
 
     if (!text || text.length < 80) {
       throw new Error("本文が取れませんでした");
@@ -529,8 +595,12 @@ async function loadFromInput() {
 
     setReaderText(text, els.wrapWords.checked);
     addHistory(url, title);
-    setStatus("");
 
+    // キャッシュ保存（次回は即表示）
+    setCacheItem(state.current);
+    saveStore();
+
+    setStatus("");
     toast("読み込みました");
   } catch (e) {
     console.error(e);
