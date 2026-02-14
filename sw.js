@@ -1,5 +1,5 @@
-/* WordHunt service worker */
-const CACHE_NAME = "pocketbridge-v0.1.4";
+/* PocketBridge service worker */
+const CACHE_NAME = "pocketbridge-v0.1.5";
 const ASSETS = [
   "./",
   "./index.html",
@@ -28,8 +28,19 @@ self.addEventListener("fetch", (event) => {
   const req = event.request;
   const url = new URL(req.url);
 
-  // App shell: cache-first
+  // App shell
   if (url.origin === location.origin) {
+    // Navigation（共有で ?url=... 等が付くと caches.match(req) が当たらないため、常に index.html を返す）
+    if (req.mode === "navigate") {
+      event.respondWith(
+        caches.match("./index.html").then((cached) =>
+          cached || fetch("./index.html").catch(() => cached)
+        )
+      );
+      return;
+    }
+
+    // Asset: cache-first
     event.respondWith(
       caches.match(req).then((cached) => cached || fetch(req).catch(() => cached))
     );

@@ -1,11 +1,11 @@
-/* PocketBridge v0.1.2
+/* PocketBridge v0.1.5
    - URLを貼る → 本文を抽出して表示
    - 単語：タップで収集
    - フレーズ：長押しで選択 → 収集
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.4";
+const APP_VERSION = "0.1.5";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
@@ -792,25 +792,51 @@ function init() {
   updatePocketBadge();
   renderPocket();
 
-  // share_target / deep link: ?url=... or ?text=...
+  // share_target / deep link: ?url=... / ?text=... （BBC等で「タイトル + URL」が混ざっていても拾う）
   const sp = new URLSearchParams(location.search);
-  const sharedUrl = sp.get("url");
-  const sharedText = sp.get("text");
-  const sharedTitle = sp.get("title");
 
-  if (sharedUrl && looksLikeUrl(sharedUrl)) {
-    els.urlInput.value = normalizeUrl(sharedUrl);
-    setStatus("共有から受け取りました");
-    loadFromInput();
-  } else if (sharedText && looksLikeUrl(sharedText)) {
-    els.urlInput.value = normalizeUrl(sharedText);
-    setStatus("共有テキストからURLを検出しました");
-    loadFromInput();
-  } else if (sp.get("u") && looksLikeUrl(sp.get("u"))) {
-    els.urlInput.value = normalizeUrl(sp.get("u"));
-    loadFromInput();
-  } else if (sharedTitle && looksLikeUrl(sharedTitle)) {
-    els.urlInput.value = normalizeUrl(sharedTitle);
+  // Android共有（Web Share Target）では、アプリによって
+  // - url= にURLが入る
+  // - text= に「タイトル + 改行 + URL」が入る
+  // など揺れがあるため、候補文字列から「最初のURL」を抜き出す。
+  const rawCandidates = [
+    sp.get("url"),
+    sp.get("text"),
+    sp.get("title"),
+    sp.get("u"),     // 互換用
+    sp.get("link"),  // 互換用
+    sp.get("href"),  // 互換用
+  ].filter(Boolean);
+
+  let incomingUrl = "";
+  let incomingHint = "";
+
+  if (rawCandidates.length) {
+    for (const raw of rawCandidates) {
+      const u = normalizeUrlFromMixedText(raw);
+      if (u) {
+        incomingUrl = u;
+        // 表示メッセージ用（どのパラメータ経由だったか）
+        if (raw === sp.get("url")) incomingHint = "共有URLから受け取りました";
+        else if (raw === sp.get("text")) incomingHint = "共有テキストからURLを検出しました";
+        else if (raw === sp.get("title")) incomingHint = "共有タイトルからURLを検出しました";
+        else incomingHint = "共有から受け取りました";
+        break;
+      }
+    }
+  }
+
+  if (incomingUrl) {
+    els.urlInput.value = incomingUrl;
+    setStatus(incomingHint || "共有から受け取りました");
+
+    // 共有URLのクエリが残ると、次回起動時にも自動読み込みが走ることがあるためクリア
+    try {
+      const clean = new URL(location.href);
+      clean.search = "";
+      history.replaceState(null, "", clean.pathname + clean.hash);
+    } catch {}
+
     loadFromInput();
   }
 
