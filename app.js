@@ -5,7 +5,7 @@
    - 収集箱 → TANGO-CHOへ送る
 */
 
-const APP_VERSION = "0.1.4";
+const APP_VERSION = "0.1.5";
 const STORE_KEY = "pocketbridge_store_v1";
 
 const els = {
@@ -61,7 +61,10 @@ const state = {
 
 function now() { return Date.now(); }
 
-const FETCH_TIMEOUT_MS = 9000; // Android体感のため少し短め
+// Android環境ではネット状況が不安定になりやすいので、
+// 直取得は短め・抽出（Jina）は少し長めにして「全部タイムアウト」を避ける。
+const FETCH_TIMEOUT_DIRECT_MS = 8000;
+const FETCH_TIMEOUT_JINA_MS = 22000;
 
 function pruneCache(maxEntries = 10) {
   try {
@@ -85,7 +88,7 @@ function getCacheItem(url) {
   return (state.cache && state.cache[url]) ? state.cache[url] : null;
 }
 
-async function fetchWithTimeout(url, opts = {}, timeoutMs = FETCH_TIMEOUT_MS) {
+async function fetchWithTimeout(url, opts = {}, timeoutMs) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort("timeout"), timeoutMs);
   try {
@@ -293,7 +296,7 @@ function htmlToText(html, baseUrl) {
 }
 
 async function fetchDirect(url) {
-  const res = await fetchWithTimeout(url, { cache: "no-store" });
+  const res = await fetchWithTimeout(url, { cache: "no-store" }, FETCH_TIMEOUT_DIRECT_MS);
   if (!res.ok) throw new Error("HTTP " + res.status);
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("text/html") && !ct.includes("application/xhtml+xml")) {
@@ -307,9 +310,30 @@ async function fetchViaJina(url) {
   // Jina Reader: simply prepend r.jina.ai
   // docs: https://jina.ai/reader/  (public URLs向け)
   const target = "https://r.jina.ai/" + url;
-  const res = await fetchWithTimeout(target, { cache: "no-store" });
+  const res = await fetchWithTimeout(target, { cache: "no-store" }, FETCH_TIMEOUT_JINA_MS);
   if (!res.ok) throw new Error("Jina HTTP " + res.status);
   return await res.text();
+}
+
+// Promise.any がない環境（古いWebView等）でも動くようにフォールバック
+async function promiseAny(promises) {
+  if (typeof Promise.any === "function") return await Promise.any(promises);
+  return await new Promise((resolve, reject) => {
+    const errors = [];
+    let pending = promises.length;
+    if (pending === 0) reject(new Error("No promises"));
+    promises.forEach((p, idx) => {
+      Promise.resolve(p).then(resolve).catch(err => {
+        errors[idx] = err;
+        pending -= 1;
+        if (pending === 0) {
+          const e = new Error("All promises were rejected");
+          e.errors = errors;
+          reject(e);
+        }
+      });
+    });
+  });
 }
 
 function setReaderText(text, wrapWords) {
@@ -636,14 +660,8 @@ async function loadFromInput() {
       })());
     }
 
-    // 先に成功したものを採用
-    let result;
-    try {
-      result = await Promise.any(tasks);
-    } catch (e) {
-      // すべて失敗
-      throw e;
-    }
+    // 先に成功したものを採用（古いWebView向けにPromise.anyフォールバックあり）
+    const result = await promiseAny(tasks);
 
     let title = result.title || "";
     let text = result.text || "";
@@ -675,7 +693,13 @@ async function loadFromInput() {
     toast("読み込みました");
   } catch (e) {
     console.error(e);
-    setStatus("読み込みに失敗しました。URLを確認してください。");
+    const reason = String(e?.name || e?.message || "");
+    // できるだけ状況が分かる短い理由を添える（ユーザー向け）
+    const hint = /timeout/i.test(reason) ? "（タイムアウト）" :
+                 /abort/i.test(reason) ? "（中断）" :
+                 /http\s*\d+/i.test(reason) ? "（HTTPエラー）" :
+                 /cors/i.test(reason) ? "（CORS）" : "";
+    setStatus("読み込みに失敗しました。" + hint);
     toast("読み込み失敗");
   } finally {
     els.btnLoad.disabled = false;
