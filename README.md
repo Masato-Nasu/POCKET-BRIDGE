@@ -49,13 +49,6 @@
 
 ---
 
-## GitHub Pages で公開
-
-- このフォルダ一式をリポジトリ直下に置いて push
-- Settings → Pages → Deploy
-
----
-
 ## Android 共有（任意）
 
 PWAとしてインストールすると、Androidの共有先にPocketBridgeが出る場合があります（Web Share Target）。  
